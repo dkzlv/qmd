@@ -123,7 +123,7 @@ jobs:
         run: |
           echo "Attempting to run tests with Node.js ${{ matrix.node-version }}..."
           echo "Note: This project uses Bun-specific APIs and may not work with Node.js"
-          
+
           # Try to run tests, but expect failures due to Bun-specific APIs
           if npm test 2>&1 | tee node-test-output.log; then
             echo "status=success" >> $GITHUB_OUTPUT
@@ -175,25 +175,25 @@ jobs:
         run: |
           echo "=== Node.js Compatibility Assessment ===" | tee compatibility-report.txt
           echo "" | tee -a compatibility-report.txt
-          
+
           echo "## Bun-specific APIs found:" | tee -a compatibility-report.txt
           echo "" | tee -a compatibility-report.txt
-          
+
           # Search for Bun-specific imports
           echo "### 1. bun:sqlite imports:" | tee -a compatibility-report.txt
           grep -r "from ['\"]bun:sqlite['\"]" src/ test/ 2>/dev/null | wc -l | xargs echo "   Files:" | tee -a compatibility-report.txt
           grep -r "from ['\"]bun:sqlite['\"]" src/ test/ 2>/dev/null | tee -a compatibility-report.txt || echo "   None found" | tee -a compatibility-report.txt
           echo "" | tee -a compatibility-report.txt
-          
+
           echo "### 2. bun:test imports:" | tee -a compatibility-report.txt
           grep -r "from ['\"]bun:test['\"]" src/ test/ 2>/dev/null | wc -l | xargs echo "   Files:" | tee -a compatibility-report.txt
           grep -r "from ['\"]bun:test['\"]" src/ test/ 2>/dev/null | tee -a compatibility-report.txt || echo "   None found" | tee -a compatibility-report.txt
           echo "" | tee -a compatibility-report.txt
-          
+
           echo "### 3. Other Bun APIs (Glob, $):" | tee -a compatibility-report.txt
           grep -rn "from ['\"]bun['\"]" src/ 2>/dev/null | tee -a compatibility-report.txt || echo "   None found" | tee -a compatibility-report.txt
           echo "" | tee -a compatibility-report.txt
-          
+
           echo "## Node.js Alternatives:" | tee -a compatibility-report.txt
           echo "" | tee -a compatibility-report.txt
           echo "To support Node.js, consider:" | tee -a compatibility-report.txt
@@ -202,12 +202,12 @@ jobs:
           echo "3. **Glob**: Replace Bun's Glob with 'glob' or 'fast-glob' npm packages" | tee -a compatibility-report.txt
           echo "4. **Shell**: Replace Bun's $ with 'execa' or 'shelljs'" | tee -a compatibility-report.txt
           echo "" | tee -a compatibility-report.txt
-          
+
           echo "## Current Status:" | tee -a compatibility-report.txt
           echo "❌ Project is **not compatible** with Node.js without refactoring" | tee -a compatibility-report.txt
           echo "✅ Project works perfectly with Bun >= 1.0.0" | tee -a compatibility-report.txt
           echo "" | tee -a compatibility-report.txt
-          
+
           echo "## Recommendations:" | tee -a compatibility-report.txt
           echo "1. Continue using Bun as the primary runtime (best performance)" | tee -a compatibility-report.txt
           echo "2. Consider creating a compatibility layer if Node.js support is needed" | tee -a compatibility-report.txt
@@ -227,7 +227,7 @@ jobs:
           echo "### Main dependencies:" | tee -a compatibility-report.txt
           cat package.json | grep -A 10 '"dependencies"' | grep -v "^{" | grep -v "^}" | tee -a compatibility-report.txt
           echo "" | tee -a compatibility-report.txt
-          
+
           echo "### Notes:" | tee -a compatibility-report.txt
           echo "- node-llama-cpp: ✅ Compatible with Node.js" | tee -a compatibility-report.txt
           echo "- sqlite-vec: ✅ Compatible with Node.js (with better-sqlite3)" | tee -a compatibility-report.txt
@@ -265,7 +265,7 @@ jobs:
           echo "| Test with Node.js | ${{ needs.test-node.result == 'success' && '✅ Passed' || '⚠️ Expected to fail (Bun-specific APIs)' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Node.js Compatibility | ${{ needs.node-compatibility.result == 'success' && '✅ Completed' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          
+
           if [ "${{ needs.package.result }}" = "success" ] && [ "${{ needs.test-bun.result }}" = "success" ]; then
             echo "✅ **Core CI passed successfully!**" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
