@@ -10,7 +10,7 @@ import { Database } from "bun:sqlite";
 import * as sqliteVec from "sqlite-vec";
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { getDefaultLlamaCpp, disposeDefaultLlamaCpp } from "./llm";
+import { getDefaultLLM, disposeDefaultLLM } from "./llm";
 import { mkdtemp, writeFile, readdir, unlink, rmdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -26,8 +26,8 @@ let testDbPath: string;
 let testConfigDir: string;
 
 afterAll(async () => {
-  // Ensure native resources are released to avoid ggml-metal asserts on process exit.
-  await disposeDefaultLlamaCpp();
+  // Ensure resources are released
+  await disposeDefaultLLM();
 });
 
 function initTestDatabase(db: Database): void {
@@ -100,8 +100,8 @@ function initTestDatabase(db: Database): void {
     END
   `);
 
-  // Create vector table
-  db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS vectors_vec USING vec0(hash_seq TEXT PRIMARY KEY, embedding float[768] distance_metric=cosine)`);
+  // Create vector table (3072 dimensions for text-embedding-3-large)
+  db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS vectors_vec USING vec0(hash_seq TEXT PRIMARY KEY, embedding float[3072] distance_metric=cosine)`);
 }
 
 function seedTestData(db: Database): void {
@@ -158,12 +158,12 @@ function seedTestData(db: Database): void {
     `).run(doc.path, doc.title, doc.hash, now, now);
   }
 
-  // Add embeddings for vector search
-  const embedding = new Float32Array(768);
-  for (let i = 0; i < 768; i++) embedding[i] = Math.random();
+  // Add embeddings for vector search (3072 dimensions for text-embedding-3-large)
+  const embedding = new Float32Array(3072);
+  for (let i = 0; i < 3072; i++) embedding[i] = Math.random();
 
   for (const doc of docs.slice(0, 4)) { // Skip large file for embeddings
-    db.prepare(`INSERT INTO content_vectors (hash, seq, pos, model, embedded_at) VALUES (?, 0, 0, 'embeddinggemma', ?)`).run(doc.hash, now);
+    db.prepare(`INSERT INTO content_vectors (hash, seq, pos, model, embedded_at) VALUES (?, 0, 0, 'openai/text-embedding-3-large', ?)`).run(doc.hash, now);
     db.prepare(`INSERT INTO vectors_vec (hash_seq, embedding) VALUES (?, ?)`).run(`${doc.hash}_0`, embedding);
   }
 }
@@ -202,9 +202,9 @@ import type { RankedResult } from "./store";
 
 describe("MCP Server", () => {
   beforeAll(async () => {
-    // LlamaCpp uses node-llama-cpp for local model inference (no HTTP mocking needed)
-    // Use shared singleton to avoid creating multiple instances with separate GPU resources
-    getDefaultLlamaCpp();
+    // OpenRouter uses cloud API for inference
+    // Use shared singleton for caching
+    getDefaultLLM();
 
     // Set up test config directory
     const configPrefix = join(tmpdir(), `qmd-mcp-config-${Date.now()}-${Math.random().toString(36).slice(2)}`);

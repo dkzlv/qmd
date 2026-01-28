@@ -28,10 +28,7 @@ import {
   getStatus,
   hashContent,
   extractTitle,
-  formatDocForEmbedding,
-  formatQueryForEmbedding,
   chunkDocument,
-  chunkDocumentByTokens,
   clearCache,
   getCacheKey,
   getCachedResult,
@@ -62,10 +59,11 @@ import {
   DEFAULT_RERANK_MODEL,
   DEFAULT_GLOB,
   DEFAULT_MULTI_GET_MAX_BYTES,
+  EMBEDDING_DIMENSIONS,
   createStore,
   getDefaultDbPath,
 } from "./store.js";
-import { getDefaultLlamaCpp, disposeDefaultLlamaCpp, type RerankDocument, type Queryable, type QueryType } from "./llm.js";
+import { getDefaultLLM, disposeDefaultLlamaCpp, type RerankDocument, type Queryable, type QueryType } from "./llm.js";
 import type { SearchResult, RankedResult } from "./store.js";
 import {
   formatSearchResults,
@@ -230,26 +228,17 @@ function computeDisplayPath(
   return filepath;
 }
 
-// Rerank documents using node-llama-cpp cross-encoder model
+// Rerank documents - cloud-only version returns documents in original order
+// Reranking is not available in the cloud-only version (no local cross-encoder)
 async function rerank(query: string, documents: { file: string; text: string }[], _model: string = DEFAULT_RERANK_MODEL, _db?: Database): Promise<{ file: string; score: number }[]> {
   if (documents.length === 0) return [];
 
-  const total = documents.length;
-  process.stderr.write(`Reranking ${total} documents...\n`);
-  progress.indeterminate();
-
-  const llm = getDefaultLlamaCpp();
-  const rerankDocs: RerankDocument[] = documents.map((doc) => ({
+  // Cloud-only version: return documents with position-based scores
+  // This maintains the order from retrieval while providing a score
+  return documents.map((doc, index) => ({
     file: doc.file,
-    text: doc.text.slice(0, 4000), // Truncate to context limit
+    score: 1 - index * 0.01, // Slight decay to maintain order
   }));
-
-  const result = await llm.rerank(query, rerankDocs);
-
-  progress.clear();
-  process.stderr.write("\n");
-
-  return result.results.map((r) => ({ file: r.file, score: r.score }));
 }
 
 function formatTimeAgo(date: Date): string {
@@ -1506,12 +1495,13 @@ async function vectorIndex(model: string = DEFAULT_EMBED_MODEL, force: boolean =
   }
 
   // Prepare documents with chunks
-  type ChunkItem = { hash: string; title: string; text: string; seq: number; pos: number; tokens: number; bytes: number; displayName: string };
+  type ChunkItem = { hash: string; title: string; text: string; seq: number; pos: number; bytes: number; displayName: string };
   const allChunks: ChunkItem[] = [];
   let multiChunkDocs = 0;
 
-  // Chunk all documents using actual token counts
-  process.stderr.write(`Chunking ${hashesToEmbed.length} documents by token count...\n`);
+  // Chunk all documents using character-based chunking
+  // (Cloud API doesn't provide a tokenizer, so we use character approximation)
+  process.stderr.write(`Chunking ${hashesToEmbed.length} documents...\n`);
   for (const item of hashesToEmbed) {
     const encoder = new TextEncoder();
     const bodyBytes = encoder.encode(item.body).length;
@@ -1519,7 +1509,7 @@ async function vectorIndex(model: string = DEFAULT_EMBED_MODEL, force: boolean =
 
     const title = extractTitle(item.body, item.path);
     const displayName = item.path;
-    const chunks = await chunkDocumentByTokens(item.body);  // Uses actual tokenizer
+    const chunks = chunkDocument(item.body);  // Uses character-based chunking
 
     if (chunks.length > 1) multiChunkDocs++;
 
@@ -1530,7 +1520,6 @@ async function vectorIndex(model: string = DEFAULT_EMBED_MODEL, force: boolean =
         text: chunks[seq]!.text, // Chunk is guaranteed to exist by seq loop
         seq,
         pos: chunks[seq]!.pos,
-        tokens: chunks[seq]!.tokens,
         bytes: encoder.encode(chunks[seq]!.text).length,
         displayName,
       });
@@ -1556,33 +1545,27 @@ async function vectorIndex(model: string = DEFAULT_EMBED_MODEL, force: boolean =
   // Hide cursor during embedding
   cursor.hide();
 
-  // Get embedding dimensions from first chunk
+  // Use fixed embedding dimensions for OpenAI text-embedding-3-large
   progress.indeterminate();
-  const llm = getDefaultLlamaCpp();
-  const firstChunk = allChunks[0];
-  if (!firstChunk) {
-    throw new Error("No chunks available to embed");
-  }
-  const firstText = formatDocForEmbedding(firstChunk.text, firstChunk.title);
-  const firstResult = await llm.embed(firstText);
-  if (!firstResult) {
-    throw new Error("Failed to get embedding dimensions from first chunk");
-  }
-  ensureVecTable(db, firstResult.embedding.length);
+  const llm = getDefaultLLM();
+  ensureVecTable(db, EMBEDDING_DIMENSIONS);
 
   let chunksEmbedded = 0, errors = 0, bytesProcessed = 0;
   const startTime = Date.now();
 
-  // Batch embedding for better throughput
-  // Process in batches of 32 to balance memory usage and efficiency
-  const BATCH_SIZE = 32;
+  // Batch embedding for better throughput with OpenRouter API
+  // Process in batches of 100 (OpenAI supports up to 2048 inputs per request)
+  const BATCH_SIZE = 100;
 
   for (let batchStart = 0; batchStart < allChunks.length; batchStart += BATCH_SIZE) {
     const batchEnd = Math.min(batchStart + BATCH_SIZE, allChunks.length);
     const batch = allChunks.slice(batchStart, batchEnd);
 
-    // Format texts for embedding
-    const texts = batch.map(chunk => formatDocForEmbedding(chunk.text, chunk.title));
+    // OpenAI embeddings don't need task prefixes - just use title + text
+    const texts = batch.map(chunk => {
+      const titlePrefix = chunk.title ? `${chunk.title}\n\n` : "";
+      return titlePrefix + chunk.text;
+    });
 
     try {
       // Batch embed all texts at once
@@ -1606,7 +1589,8 @@ async function vectorIndex(model: string = DEFAULT_EMBED_MODEL, force: boolean =
       // If batch fails, try individual embeddings as fallback
       for (const chunk of batch) {
         try {
-          const text = formatDocForEmbedding(chunk.text, chunk.title);
+          const titlePrefix = chunk.title ? `${chunk.title}\n\n` : "";
+          const text = titlePrefix + chunk.text;
           const result = await llm.embed(text);
           if (result) {
             insertEmbedding(db, chunk.hash, chunk.seq, chunk.pos, new Float32Array(result.embedding), model, now);
@@ -2023,11 +2007,11 @@ async function vectorSearch(query: string, opts: OutputOptions, model: string = 
   outputResults(results, query, { ...opts, limit: results.length }); // Already limited
 }
 
-// Expand query using structured output with GBNF grammar
+// Expand query using the cloud LLM
 async function expandQueryStructured(query: string, includeLexical: boolean = true, context?: string): Promise<Queryable[]> {
   process.stderr.write(`${c.dim}Expanding query...${c.reset}\n`);
 
-  const llm = getDefaultLlamaCpp();
+  const llm = getDefaultLLM();
   const queryables = await llm.expandQuery(query, { includeLexical, context });
 
   // Log the expansion as a tree
@@ -2365,12 +2349,15 @@ function showHelp(): void {
   console.log("  qmd multi-get <pattern> [-l N] [--max-bytes N]  - Get multiple docs by glob or comma-separated list");
   console.log("  qmd status                    - Show index status and collections");
   console.log("  qmd update [--pull]           - Re-index all collections (--pull: git pull first)");
-  console.log("  qmd embed [-f]                - Create vector embeddings (800 tokens/chunk, 15% overlap)");
+  console.log("  qmd embed [-f]                - Create vector embeddings via OpenRouter API");
   console.log("  qmd cleanup                   - Remove cache and orphaned data, vacuum DB");
-  console.log("  qmd search <query>            - Full-text search (BM25)");
-  console.log("  qmd vsearch <query>           - Vector similarity search");
-  console.log("  qmd query <query>             - Combined search with query expansion + reranking");
+  console.log("  qmd vsearch <query>           - Vector similarity search (primary search command)");
   console.log("  qmd mcp                       - Start MCP server (for AI agent integration)");
+  console.log("");
+  console.log("Environment variables:");
+  console.log("  OPENROUTER_API_KEY         - Required: OpenRouter API key");
+  console.log("  QMD_EMBED_MODEL            - Embedding model (default: openai/text-embedding-3-large)");
+  console.log("  QMD_CHAT_MODEL             - Chat model for query expansion (default: openai/gpt-4o-mini)");
   console.log("");
   console.log("Global options:");
   console.log("  --index <name>             - Use custom index name (default: index)");
@@ -2393,10 +2380,9 @@ function showHelp(): void {
   console.log("  --max-bytes <num>          - Skip files larger than N bytes (default: 10240)");
   console.log("  --json/--csv/--md/--xml/--files - Output format (same as search)");
   console.log("");
-  console.log("Models (auto-downloaded from HuggingFace):");
-  console.log("  Embedding: embeddinggemma-300M-Q8_0");
-  console.log("  Reranking: qwen3-reranker-0.6b-q8_0");
-  console.log("  Generation: Qwen3-0.6B-Q8_0");
+  console.log("Cloud models (via OpenRouter):");
+  console.log("  Embedding: openai/text-embedding-3-large (3072 dimensions)");
+  console.log("  Query expansion: openai/gpt-4o-mini");
   console.log("");
   console.log(`Index: ${getDbPath()}`);
 }
@@ -2583,11 +2569,11 @@ if (import.meta.main) {
       break;
 
     case "search":
-      if (!cli.query) {
-        console.error("Usage: qmd search [options] <query>");
-        process.exit(1);
-      }
-      search(cli.query, cli.opts);
+      // BM25-only search removed in cloud-only version
+      // Redirect users to vsearch
+      console.error("The 'search' command has been removed in the cloud-only version.");
+      console.error("Use 'qmd vsearch <query>' for vector similarity search instead.");
+      process.exit(1);
       break;
 
     case "vsearch":
@@ -2603,11 +2589,11 @@ if (import.meta.main) {
       break;
 
     case "query":
-      if (!cli.query) {
-        console.error("Usage: qmd query [options] <query>");
-        process.exit(1);
-      }
-      await querySearch(cli.query, cli.opts);
+      // Hybrid search with reranking removed in cloud-only version
+      // Redirect users to vsearch
+      console.error("The 'query' command has been removed in the cloud-only version.");
+      console.error("Use 'qmd vsearch <query>' for vector similarity search instead.");
+      process.exit(1);
       break;
 
     case "mcp": {

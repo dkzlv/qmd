@@ -1,4 +1,6 @@
-# QMD - Quick Markdown Search
+# QMD-Cloud - Quick Markdown Search (Cloud Version)
+
+A fork of [tobi/qmd](https://github.com/tobi/qmd) using OpenRouter API instead of local models.
 
 **Note**: This project uses [bd (beads)](https://github.com/steveyegge/beads) for issue tracking. Use `bd` commands instead of markdown TODOs. See AGENTS.md for workflow details.
 
@@ -7,73 +9,80 @@ Use Bun instead of Node.js (`bun` not `node`, `bun install` not `npm install`).
 ## Commands
 
 ```sh
-qmd collection add . --name <n>   # Create/index collection
-qmd collection list               # List all collections with details
-qmd collection remove <name>      # Remove a collection by name
-qmd collection rename <old> <new> # Rename a collection
-qmd ls [collection[/path]]        # List collections or files in a collection
-qmd context add [path] "text"     # Add context for path (defaults to current dir)
-qmd context list                  # List all contexts
-qmd context check                 # Check for collections/paths missing context
-qmd context rm <path>             # Remove context
-qmd get <file>                    # Get document by path or docid (#abc123)
-qmd multi-get <pattern>           # Get multiple docs by glob or comma-separated list
-qmd status                        # Show index status and collections
-qmd update [--pull]               # Re-index all collections (--pull: git pull first)
-qmd embed                         # Generate vector embeddings (uses node-llama-cpp)
-qmd search <query>                # BM25 full-text search
-qmd vsearch <query>               # Vector similarity search
-qmd query <query>                 # Hybrid search with reranking (best quality)
+qmd-cloud collection add . --name <n>   # Create/index collection
+qmd-cloud collection list               # List all collections with details
+qmd-cloud collection remove <name>      # Remove a collection by name
+qmd-cloud collection rename <old> <new> # Rename a collection
+qmd-cloud ls [collection[/path]]        # List collections or files in a collection
+qmd-cloud context add [path] "text"     # Add context for path (defaults to current dir)
+qmd-cloud context list                  # List all contexts
+qmd-cloud context check                 # Check for collections/paths missing context
+qmd-cloud context rm <path>             # Remove context
+qmd-cloud get <file>                    # Get document by path or docid (#abc123)
+qmd-cloud multi-get <pattern>           # Get multiple docs by glob or comma-separated list
+qmd-cloud status                        # Show index status and collections
+qmd-cloud update [--pull]               # Re-index all collections (--pull: git pull first)
+qmd-cloud embed                         # Generate vector embeddings (uses OpenRouter API)
+qmd-cloud vsearch <query>               # Vector similarity search (primary search command)
 ```
+
+## Environment Variables
+
+Required:
+- `OPENROUTER_API_KEY` - Your OpenRouter API key
+
+Optional:
+- `QMD_EMBED_MODEL` - Embedding model (default: `openai/text-embedding-3-large`)
+- `QMD_CHAT_MODEL` - Chat model for query expansion (default: `openai/gpt-4o-mini`)
 
 ## Collection Management
 
 ```sh
 # List all collections
-qmd collection list
+qmd-cloud collection list
 
 # Create a collection with explicit name
-qmd collection add ~/Documents/notes --name mynotes --mask '**/*.md'
+qmd-cloud collection add ~/Documents/notes --name mynotes --mask '**/*.md'
 
 # Remove a collection
-qmd collection remove mynotes
+qmd-cloud collection remove mynotes
 
 # Rename a collection
-qmd collection rename mynotes my-notes
+qmd-cloud collection rename mynotes my-notes
 
 # List all files in a collection
-qmd ls mynotes
+qmd-cloud ls mynotes
 
 # List files with a path prefix
-qmd ls journals/2025
-qmd ls qmd://journals/2025
+qmd-cloud ls journals/2025
+qmd-cloud ls qmd://journals/2025
 ```
 
 ## Context Management
 
 ```sh
 # Add context to current directory (auto-detects collection)
-qmd context add "Description of these files"
+qmd-cloud context add "Description of these files"
 
 # Add context to a specific path
-qmd context add /subfolder "Description for subfolder"
+qmd-cloud context add /subfolder "Description for subfolder"
 
 # Add global context to all collections (system message)
-qmd context add / "Always include this context"
+qmd-cloud context add / "Always include this context"
 
 # Add context using virtual paths
-qmd context add qmd://journals/ "Context for entire journals collection"
-qmd context add qmd://journals/2024 "Journal entries from 2024"
+qmd-cloud context add qmd://journals/ "Context for entire journals collection"
+qmd-cloud context add qmd://journals/2024 "Journal entries from 2024"
 
 # List all contexts
-qmd context list
+qmd-cloud context list
 
 # Check for collections or paths without context
-qmd context check
+qmd-cloud context check
 
 # Remove context
-qmd context rm qmd://journals/2024
-qmd context rm /  # Remove global context
+qmd-cloud context rm qmd://journals/2024
+qmd-cloud context rm /  # Remove global context
 ```
 
 ## Document IDs (docid)
@@ -83,15 +92,15 @@ Docids are shown in search results as `#abc123` and can be used with `get` and `
 
 ```sh
 # Search returns docid in results
-qmd search "query" --json
+qmd-cloud vsearch "query" --json
 # Output: [{"docid": "#abc123", "score": 0.85, "file": "docs/readme.md", ...}]
 
 # Get document by docid
-qmd get "#abc123"
-qmd get abc123              # Leading # is optional
+qmd-cloud get "#abc123"
+qmd-cloud get abc123              # Leading # is optional
 
 # Docids also work in multi-get comma-separated lists
-qmd multi-get "#abc123, #def456"
+qmd-cloud multi-get "#abc123, #def456"
 ```
 
 ## Options
@@ -117,20 +126,20 @@ qmd multi-get "#abc123, #def456"
 
 ```sh
 bun src/qmd.ts <command>   # Run from source
-bun link               # Install globally as 'qmd'
+bun link                   # Install globally as 'qmd-cloud'
 ```
 
 ## Architecture
 
-- SQLite FTS5 for full-text search (BM25)
+- SQLite FTS5 for full-text search (not exposed in CLI, used internally)
 - sqlite-vec for vector similarity search
-- node-llama-cpp for embeddings (embeddinggemma), reranking (qwen3-reranker), and query expansion (Qwen3)
-- Reciprocal Rank Fusion (RRF) for combining results
+- OpenRouter API for embeddings (text-embedding-3-large, 3072 dimensions)
+- OpenRouter API for query expansion (gpt-4o-mini)
 - Token-based chunking: 800 tokens/chunk with 15% overlap
 
 ## Important: Do NOT run automatically
 
-- Never run `qmd collection add`, `qmd embed`, or `qmd update` automatically
+- Never run `qmd-cloud collection add`, `qmd-cloud embed`, or `qmd-cloud update` automatically
 - Never modify the SQLite database directly
 - Write out example commands for the user to run manually
 - Index is stored at `~/.cache/qmd/index.sqlite`
@@ -138,4 +147,4 @@ bun link               # Install globally as 'qmd'
 ## Do NOT compile
 
 - Never run `bun build --compile` - it overwrites the shell wrapper and breaks sqlite-vec
-- The `qmd` file is a shell script that runs `bun src/qmd.ts` - do not replace it
+- The `qmd-cloud` file is a shell script that runs `bun src/qmd.ts` - do not replace it

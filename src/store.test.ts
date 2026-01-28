@@ -12,7 +12,7 @@ import { unlink, mkdtemp, rmdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import YAML from "yaml";
-import { disposeDefaultLlamaCpp } from "./llm.js";
+import { disposeDefaultLLM } from "./llm.js";
 import {
   createStore,
   getDefaultDbPath,
@@ -22,8 +22,6 @@ import {
   getRealPath,
   hashContent,
   extractTitle,
-  formatQueryForEmbedding,
-  formatDocForEmbedding,
   chunkDocument,
   chunkDocumentByTokens,
   reciprocalRankFusion,
@@ -221,8 +219,8 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  // Ensure native resources are released to avoid ggml-metal asserts on process exit.
-  await disposeDefaultLlamaCpp();
+  // Ensure resources are released
+  await disposeDefaultLLM();
 
   try {
     // Clean up test directory
@@ -505,22 +503,8 @@ describe("Document Helpers", () => {
 // Embedding Format Tests
 // =============================================================================
 
-describe("Embedding Formatting", () => {
-  test("formatQueryForEmbedding adds search task prefix", () => {
-    const formatted = formatQueryForEmbedding("how to deploy");
-    expect(formatted).toBe("task: search result | query: how to deploy");
-  });
-
-  test("formatDocForEmbedding adds title and text prefix", () => {
-    const formatted = formatDocForEmbedding("Some content", "My Title");
-    expect(formatted).toBe("title: My Title | text: Some content");
-  });
-
-  test("formatDocForEmbedding handles missing title", () => {
-    const formatted = formatDocForEmbedding("Some content");
-    expect(formatted).toBe("title: none | text: Some content");
-  });
-});
+// NOTE: formatQueryForEmbedding and formatDocForEmbedding were removed in the
+// cloud migration. OpenAI's text-embedding-3-large doesn't need task prefixes.
 
 // =============================================================================
 // Document Chunking Tests
@@ -1769,10 +1753,10 @@ describe("Integration", () => {
 });
 
 // =============================================================================
-// LlamaCpp Integration Tests (using real local models)
+// OpenRouter Integration Tests (using cloud API)
 // =============================================================================
 
-describe("LlamaCpp Integration", () => {
+describe("OpenRouter Integration", () => {
   test("searchVec returns empty when no vector index", async () => {
     const store = await createTestStore();
     const collectionName = await createTestCollection();
@@ -1782,7 +1766,7 @@ describe("LlamaCpp Integration", () => {
     });
 
     // No vectors_vec table exists, should return empty
-    const results = await store.searchVec("query", "embeddinggemma", 10);
+    const results = await store.searchVec("query", "openai/text-embedding-3-large", 10);
     expect(results).toHaveLength(0);
 
     await cleanupTestDb(store);
@@ -1801,13 +1785,13 @@ describe("LlamaCpp Integration", () => {
       displayPath: "doc1.md",
     });
 
-    // Create vector table and insert a vector
-    store.ensureVecTable(768);
-    const embedding = Array(768).fill(0).map(() => Math.random());
+    // Create vector table and insert a vector (3072 dimensions for text-embedding-3-large)
+    store.ensureVecTable(3072);
+    const embedding = Array(3072).fill(0).map(() => Math.random());
     store.db.prepare(`INSERT INTO content_vectors (hash, seq, pos, model, embedded_at) VALUES (?, 0, 0, 'test', ?)`).run(hash, new Date().toISOString());
     store.db.prepare(`INSERT INTO vectors_vec (hash_seq, embedding) VALUES (?, ?)`).run(`${hash}_0`, new Float32Array(embedding));
 
-    const results = await store.searchVec("test query", "embeddinggemma", 10);
+    const results = await store.searchVec("test query", "openai/text-embedding-3-large", 10);
     expect(results).toHaveLength(1);
     expect(results[0]!.displayPath).toBe(`${collectionName}/doc1.md`);
     expect(results[0]!.filepath).toBe(`qmd://${collectionName}/doc1.md`);
@@ -1836,21 +1820,21 @@ describe("LlamaCpp Integration", () => {
       body: "Content in collection two",
     });
 
-    // Create vectors_vec table with correct dimensions (768 for embeddinggemma)
-    store.ensureVecTable(768);
-    const embedding1 = Array(768).fill(0).map(() => Math.random());
-    const embedding2 = Array(768).fill(0).map(() => Math.random());
+    // Create vectors_vec table with correct dimensions (3072 for text-embedding-3-large)
+    store.ensureVecTable(3072);
+    const embedding1 = Array(3072).fill(0).map(() => Math.random());
+    const embedding2 = Array(3072).fill(0).map(() => Math.random());
     store.db.prepare(`INSERT INTO content_vectors (hash, seq, pos, model, embedded_at) VALUES (?, 0, 0, 'test', ?)`).run(hash1, new Date().toISOString());
     store.db.prepare(`INSERT INTO content_vectors (hash, seq, pos, model, embedded_at) VALUES (?, 0, 0, 'test', ?)`).run(hash2, new Date().toISOString());
     store.db.prepare(`INSERT INTO vectors_vec (hash_seq, embedding) VALUES (?, ?)`).run(`${hash1}_0`, new Float32Array(embedding1));
     store.db.prepare(`INSERT INTO vectors_vec (hash_seq, embedding) VALUES (?, ?)`).run(`${hash2}_0`, new Float32Array(embedding2));
 
     // Search without filter - should return both
-    const allResults = await store.searchVec("content", "embeddinggemma", 10);
+    const allResults = await store.searchVec("content", "openai/text-embedding-3-large", 10);
     expect(allResults).toHaveLength(2);
 
     // Search with collection filter - should return only from collection1
-    const filtered = await store.searchVec("content", "embeddinggemma", 10, collection1 as unknown as number);
+    const filtered = await store.searchVec("content", "openai/text-embedding-3-large", 10, collection1);
     expect(filtered).toHaveLength(1);
     expect(filtered[0]!.collectionName).toBe(collection1);
 
@@ -1873,16 +1857,16 @@ describe("LlamaCpp Integration", () => {
       displayPath: "regression.md",
     });
 
-    // Create vector table and insert a test vector
-    store.ensureVecTable(768);
-    const embedding = Array(768).fill(0).map(() => Math.random());
+    // Create vector table and insert a test vector (3072 dimensions for text-embedding-3-large)
+    store.ensureVecTable(3072);
+    const embedding = Array(3072).fill(0).map(() => Math.random());
     store.db.prepare(`INSERT INTO content_vectors (hash, seq, pos, model, embedded_at) VALUES (?, 0, 0, 'test', ?)`).run(hash, new Date().toISOString());
     store.db.prepare(`INSERT INTO vectors_vec (hash_seq, embedding) VALUES (?, ?)`).run(`${hash}_0`, new Float32Array(embedding));
 
     // This should complete quickly (not hang) due to the two-step fix
     // The old code with JOINs in the sqlite-vec query would hang indefinitely
     const startTime = Date.now();
-    const results = await store.searchVec("test content", "embeddinggemma", 5);
+    const results = await store.searchVec("test content", "openai/text-embedding-3-large", 5);
     const elapsed = Date.now() - startTime;
 
     // If the query took more than 5 seconds, something is wrong

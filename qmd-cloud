@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# qmd - Quick Markdown Search
+# qmd-cloud - Quick Markdown Search (Cloud version)
+# A fork of tobi/qmd using OpenRouter API instead of local models
 set -euo pipefail
 
 # Find bun - prefer PATH, fallback to known locations

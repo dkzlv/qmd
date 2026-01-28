@@ -203,7 +203,7 @@ describe("CLI Help", () => {
     expect(exitCode).toBe(0);
     expect(stdout).toContain("Usage:");
     expect(stdout).toContain("qmd collection add");
-    expect(stdout).toContain("qmd search");
+    expect(stdout).toContain("qmd vsearch");  // Primary search command is now vsearch
   });
 
   test("shows help with no arguments", async () => {
@@ -258,40 +258,24 @@ describe("CLI Status Command", () => {
   });
 });
 
-describe("CLI Search Command", () => {
+describe("CLI Search Command (Deprecated)", () => {
   beforeEach(async () => {
     // Ensure we have indexed files
     await runQmd(["collection", "add", "."]);
   });
 
-  test("searches for documents with BM25", async () => {
-    const { stdout, exitCode } = await runQmd(["search", "meeting"]);
-    expect(exitCode).toBe(0);
-    // Should find meeting.md
-    expect(stdout.toLowerCase()).toContain("meeting");
-  });
-
-  test("searches with limit option", async () => {
-    const { stdout, exitCode } = await runQmd(["search", "-n", "1", "test"]);
-    expect(exitCode).toBe(0);
-  });
-
-  test("searches with all results option", async () => {
-    const { stdout, exitCode } = await runQmd(["search", "--all", "the"]);
-    expect(exitCode).toBe(0);
-  });
-
-  test("returns no results message for non-matching query", async () => {
-    const { stdout, exitCode } = await runQmd(["search", "xyznonexistent123"]);
-    expect(exitCode).toBe(0);
-    expect(stdout).toContain("No results");
-  });
-
-  test("requires query argument", async () => {
-    const { stdout, stderr, exitCode } = await runQmd(["search"]);
+  test("search command is removed and shows error", async () => {
+    const { stderr, exitCode } = await runQmd(["search", "meeting"]);
     expect(exitCode).toBe(1);
-    // Error message goes to stderr
-    expect(stderr).toContain("Usage:");
+    expect(stderr).toContain("'search' command has been removed");
+    expect(stderr).toContain("vsearch");  // Should suggest using vsearch instead
+  });
+
+  test("query command is removed and shows error", async () => {
+    const { stderr, exitCode } = await runQmd(["query", "meeting"]);
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("'query' command has been removed");
+    expect(stderr).toContain("vsearch");  // Should suggest using vsearch instead
   });
 });
 
@@ -448,31 +432,24 @@ describe("CLI Output Formats", () => {
     await runQmd(["collection", "add", "."]);
   });
 
-  test("search with --json flag outputs JSON", async () => {
-    const { stdout, exitCode } = await runQmd(["search", "--json", "test"]);
-    expect(exitCode).toBe(0);
-    // Should be valid JSON
-    const parsed = JSON.parse(stdout);
-    expect(Array.isArray(parsed)).toBe(true);
+  // Note: search command was removed in the cloud-only version
+  // Tests for output formats with vsearch require embeddings (API calls)
+  // These tests verify the deprecated search commands show proper errors
+  
+  test("search with --json flag shows deprecation error", async () => {
+    const { stderr, exitCode } = await runQmd(["search", "--json", "test"]);
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("'search' command has been removed");
   });
 
-  test("search with --files flag outputs file paths", async () => {
-    const { stdout, exitCode } = await runQmd(["search", "--files", "meeting"]);
-    expect(exitCode).toBe(0);
-    expect(stdout).toContain(".md");
-  });
-
-  test("search output includes snippets by default", async () => {
-    const { stdout, exitCode } = await runQmd(["search", "API"]);
-    expect(exitCode).toBe(0);
-    // If results found, should have snippet content
-    if (!stdout.includes("No results")) {
-      expect(stdout.toLowerCase()).toContain("api");
-    }
+  test("search with --files flag shows deprecation error", async () => {
+    const { stderr, exitCode } = await runQmd(["search", "--files", "meeting"]);
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("'search' command has been removed");
   });
 });
 
-describe("CLI Search with Collection Filter", () => {
+describe("CLI Search with Collection Filter (Deprecated)", () => {
   let localDbPath: string;
 
   beforeEach(async () => {
@@ -483,19 +460,15 @@ describe("CLI Search with Collection Filter", () => {
     await runQmd(["collection", "add", ".", "--name", "docs", "--mask", "docs/*.md"], { dbPath: localDbPath });
   });
 
-  test("filters search by collection name", async () => {
-    const { stdout, stderr, exitCode } = await runQmd([
+  test("search with collection filter shows deprecation error", async () => {
+    const { stderr, exitCode } = await runQmd([
       "search",
       "-c",
       "notes",
       "meeting",
     ], { dbPath: localDbPath });
-    if (exitCode !== 0) {
-      console.log("Collection filter search failed:");
-      console.log("stdout:", stdout);
-      console.log("stderr:", stderr);
-    }
-    expect(exitCode).toBe(0);
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("'search' command has been removed");
   });
 });
 
@@ -782,77 +755,43 @@ describe("search output formats", () => {
     await runQmd(["context", "add", `qmd://${collName}/`, "Test fixtures for QMD"], { dbPath: localDbPath, configDir: localConfigDir });
   });
 
-  test("search --json includes qmd:// path, docid, and context", async () => {
-    const { stdout, exitCode } = await runQmd(["search", "test", "--json", "-n", "1"], { dbPath: localDbPath, configDir: localConfigDir });
-    expect(exitCode).toBe(0);
-
-    const results = JSON.parse(stdout);
-    expect(results.length).toBeGreaterThan(0);
-
-    const result = results[0];
-    expect(result.file).toMatch(new RegExp(`^qmd://${collName}/`));
-    expect(result.docid).toMatch(/^#[a-f0-9]{6}$/);
-    expect(result.context).toBe("Test fixtures for QMD");
-    // Ensure no full filesystem paths
-    expect(result.file).not.toMatch(/^\/Users\//);
-    expect(result.file).not.toMatch(/^\/home\//);
+  // Note: search command was removed in the cloud-only version.
+  // These tests now verify deprecation error is shown.
+  
+  test("search --json shows deprecation error", async () => {
+    const { stderr, exitCode } = await runQmd(["search", "test", "--json", "-n", "1"], { dbPath: localDbPath, configDir: localConfigDir });
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("'search' command has been removed");
   });
 
-  test("search --files includes qmd:// path, docid, and context", async () => {
-    const { stdout, exitCode } = await runQmd(["search", "test", "--files", "-n", "1"], { dbPath: localDbPath, configDir: localConfigDir });
-    expect(exitCode).toBe(0);
-
-    // Format: #docid,score,qmd://collection/path,"context"
-    expect(stdout).toMatch(new RegExp(`^#[a-f0-9]{6},[\\d.]+,qmd://${collName}/`, "m"));
-    expect(stdout).toContain("Test fixtures for QMD");
-    // Ensure no full filesystem paths
-    expect(stdout).not.toMatch(/\/Users\//);
-    expect(stdout).not.toMatch(/\/home\//);
+  test("search --files shows deprecation error", async () => {
+    const { stderr, exitCode } = await runQmd(["search", "test", "--files", "-n", "1"], { dbPath: localDbPath, configDir: localConfigDir });
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("'search' command has been removed");
   });
 
-  test("search --csv includes qmd:// path, docid, and context", async () => {
-    const { stdout, exitCode } = await runQmd(["search", "test", "--csv", "-n", "1"], { dbPath: localDbPath, configDir: localConfigDir });
-    expect(exitCode).toBe(0);
-
-    // Header should include context
-    expect(stdout).toMatch(/^docid,score,file,title,context,line,snippet$/m);
-    // Data rows should have qmd:// paths and context
-    expect(stdout).toMatch(new RegExp(`#[a-f0-9]{6},[\\d.]+,qmd://${collName}/`));
-    expect(stdout).toContain("Test fixtures for QMD");
-    // Ensure no full filesystem paths
-    expect(stdout).not.toMatch(/\/Users\//);
-    expect(stdout).not.toMatch(/\/home\//);
+  test("search --csv shows deprecation error", async () => {
+    const { stderr, exitCode } = await runQmd(["search", "test", "--csv", "-n", "1"], { dbPath: localDbPath, configDir: localConfigDir });
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("'search' command has been removed");
   });
 
-  test("search --md includes docid and context", async () => {
-    const { stdout, exitCode } = await runQmd(["search", "test", "--md", "-n", "1"], { dbPath: localDbPath, configDir: localConfigDir });
-    expect(exitCode).toBe(0);
-
-    expect(stdout).toMatch(/\*\*docid:\*\* `#[a-f0-9]{6}`/);
-    expect(stdout).toContain("**context:** Test fixtures for QMD");
+  test("search --md shows deprecation error", async () => {
+    const { stderr, exitCode } = await runQmd(["search", "test", "--md", "-n", "1"], { dbPath: localDbPath, configDir: localConfigDir });
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("'search' command has been removed");
   });
 
-  test("search --xml includes qmd:// path, docid, and context", async () => {
-    const { stdout, exitCode } = await runQmd(["search", "test", "--xml", "-n", "1"], { dbPath: localDbPath, configDir: localConfigDir });
-    expect(exitCode).toBe(0);
-
-    expect(stdout).toMatch(new RegExp(`<file docid="#[a-f0-9]{6}" name="qmd://${collName}/`));
-    expect(stdout).toContain('context="Test fixtures for QMD"');
-    // Ensure no full filesystem paths
-    expect(stdout).not.toMatch(/\/Users\//);
-    expect(stdout).not.toMatch(/\/home\//);
+  test("search --xml shows deprecation error", async () => {
+    const { stderr, exitCode } = await runQmd(["search", "test", "--xml", "-n", "1"], { dbPath: localDbPath, configDir: localConfigDir });
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("'search' command has been removed");
   });
 
-  test("search default CLI format includes qmd:// path, docid, and context", async () => {
-    const { stdout, exitCode } = await runQmd(["search", "test", "-n", "1"], { dbPath: localDbPath, configDir: localConfigDir });
-    expect(exitCode).toBe(0);
-
-    // First line should have qmd:// path and docid
-    expect(stdout).toMatch(new RegExp(`^qmd://${collName}/.*#[a-f0-9]{6}`, "m"));
-    expect(stdout).toContain("Context: Test fixtures for QMD");
-    // Ensure no full filesystem paths
-    expect(stdout).not.toMatch(/\/Users\//);
-    expect(stdout).not.toMatch(/\/home\//);
+  test("search default CLI format shows deprecation error", async () => {
+    const { stderr, exitCode } = await runQmd(["search", "test", "-n", "1"], { dbPath: localDbPath, configDir: localConfigDir });
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("'search' command has been removed");
   });
 });
 

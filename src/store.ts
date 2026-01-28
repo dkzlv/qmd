@@ -16,10 +16,7 @@ import { Glob } from "bun";
 import { realpathSync } from "node:fs";
 import * as sqliteVec from "sqlite-vec";
 import {
-  LlamaCpp,
-  getDefaultLlamaCpp,
-  formatQueryForEmbedding,
-  formatDocForEmbedding,
+  getDefaultLLM,
   type RerankDocument,
 } from "./llm";
 import {
@@ -42,11 +39,14 @@ import {
 // =============================================================================
 
 const HOME = Bun.env.HOME || "/tmp";
-export const DEFAULT_EMBED_MODEL = "embeddinggemma";
-export const DEFAULT_RERANK_MODEL = "ExpedientFalcon/qwen3-reranker:0.6b-q8_0";
-export const DEFAULT_QUERY_MODEL = "Qwen/Qwen3-1.7B";
+export const DEFAULT_EMBED_MODEL = "openai/text-embedding-3-large";
+export const DEFAULT_RERANK_MODEL = "none"; // Reranking not used in cloud-only version
+export const DEFAULT_QUERY_MODEL = "openai/gpt-4o-mini";
 export const DEFAULT_GLOB = "**/*.md";
 export const DEFAULT_MULTI_GET_MAX_BYTES = 10 * 1024; // 10KB
+
+// Embedding dimensions for OpenAI text-embedding-3-large
+export const EMBEDDING_DIMENSIONS = 3072;
 
 // Chunking: 800 tokens per chunk with 15% overlap
 export const CHUNK_SIZE_TOKENS = 800;
@@ -569,7 +569,13 @@ function ensureVecTableInternal(db: Database, dimensions: number): void {
     const hasCosine = tableInfo.sql.includes('distance_metric=cosine');
     const existingDims = match?.[1] ? parseInt(match[1], 10) : null;
     if (existingDims === dimensions && hasHashSeq && hasCosine) return;
-    // Table exists but wrong schema - need to rebuild
+    // Table exists but wrong schema/dimensions - need to rebuild
+    // This handles migration from 768-dim (embeddinggemma) to 3072-dim (OpenAI)
+    if (existingDims !== dimensions) {
+      console.log(`Recreating vector table: ${existingDims} -> ${dimensions} dimensions`);
+      // Clear content_vectors too since embeddings are incompatible
+      db.exec(`DELETE FROM content_vectors`);
+    }
     db.exec("DROP TABLE IF EXISTS vectors_vec");
   }
   db.exec(`CREATE VIRTUAL TABLE vectors_vec USING vec0(hash_seq TEXT PRIMARY KEY, embedding float[${dimensions}] distance_metric=cosine)`);
@@ -1160,7 +1166,8 @@ export function getActiveDocumentPaths(db: Database, collectionName: string): st
   return rows.map(r => r.path);
 }
 
-export { formatQueryForEmbedding, formatDocForEmbedding };
+// Note: formatQueryForEmbedding and formatDocForEmbedding are no longer needed
+// OpenAI embeddings don't require task prefixes like embeddinggemma did
 
 export function chunkDocument(content: string, maxChars: number = CHUNK_SIZE_CHARS, overlapChars: number = CHUNK_OVERLAP_CHARS): { text: string; pos: number }[] {
   if (content.length <= maxChars) {
@@ -1240,79 +1247,31 @@ export function chunkDocument(content: string, maxChars: number = CHUNK_SIZE_CHA
 }
 
 /**
- * Chunk a document by actual token count using the LLM tokenizer.
- * More accurate than character-based chunking but requires async.
+ * Chunk a document by estimated token count.
+ * Uses character-based approximation (~4 chars per token) since cloud APIs
+ * don't provide tokenization. Returns the same interface as the old token-based
+ * chunking for backward compatibility.
+ *
+ * @deprecated Use chunkDocument() directly for new code
  */
 export async function chunkDocumentByTokens(
   content: string,
   maxTokens: number = CHUNK_SIZE_TOKENS,
   overlapTokens: number = CHUNK_OVERLAP_TOKENS
 ): Promise<{ text: string; pos: number; tokens: number }[]> {
-  const llm = getDefaultLlamaCpp();
+  // Approximate: ~4 characters per token
+  const charsPerToken = 4;
+  const maxChars = maxTokens * charsPerToken;
+  const overlapChars = overlapTokens * charsPerToken;
 
-  // Tokenize once upfront
-  const allTokens = await llm.tokenize(content);
-  const totalTokens = allTokens.length;
+  const charChunks = chunkDocument(content, maxChars, overlapChars);
 
-  if (totalTokens <= maxTokens) {
-    return [{ text: content, pos: 0, tokens: totalTokens }];
-  }
-
-  const chunks: { text: string; pos: number; tokens: number }[] = [];
-  const step = maxTokens - overlapTokens;
-  const avgCharsPerToken = content.length / totalTokens;
-  let tokenPos = 0;
-
-  while (tokenPos < totalTokens) {
-    const chunkEnd = Math.min(tokenPos + maxTokens, totalTokens);
-    const chunkTokens = allTokens.slice(tokenPos, chunkEnd);
-    let chunkText = await llm.detokenize(chunkTokens);
-
-    // Find a good break point if not at end of document
-    if (chunkEnd < totalTokens) {
-      const searchStart = Math.floor(chunkText.length * 0.7);
-      const searchSlice = chunkText.slice(searchStart);
-
-      let breakOffset = -1;
-      const paragraphBreak = searchSlice.lastIndexOf('\n\n');
-      if (paragraphBreak >= 0) {
-        breakOffset = paragraphBreak + 2;
-      } else {
-        const sentenceEnd = Math.max(
-          searchSlice.lastIndexOf('. '),
-          searchSlice.lastIndexOf('.\n'),
-          searchSlice.lastIndexOf('? '),
-          searchSlice.lastIndexOf('?\n'),
-          searchSlice.lastIndexOf('! '),
-          searchSlice.lastIndexOf('!\n')
-        );
-        if (sentenceEnd >= 0) {
-          breakOffset = sentenceEnd + 2;
-        } else {
-          const lineBreak = searchSlice.lastIndexOf('\n');
-          if (lineBreak >= 0) {
-            breakOffset = lineBreak + 1;
-          }
-        }
-      }
-
-      if (breakOffset >= 0) {
-        chunkText = chunkText.slice(0, searchStart + breakOffset);
-      }
-    }
-
-    // Approximate character position based on token position
-    const charPos = Math.floor(tokenPos * avgCharsPerToken);
-    chunks.push({ text: chunkText, pos: charPos, tokens: chunkTokens.length });
-
-    // Move forward
-    if (chunkEnd >= totalTokens) break;
-
-    // Advance by step tokens (maxTokens - overlap)
-    tokenPos += step;
-  }
-
-  return chunks;
+  // Convert to the expected format with estimated token counts
+  return charChunks.map(chunk => ({
+    text: chunk.text,
+    pos: chunk.pos,
+    tokens: Math.ceil(chunk.text.length / charsPerToken),
+  }));
 }
 
 // =============================================================================
@@ -1991,10 +1950,9 @@ export async function searchVec(db: Database, query: string, model: string, limi
 // =============================================================================
 
 async function getEmbedding(text: string, model: string, isQuery: boolean): Promise<number[] | null> {
-  const llm = getDefaultLlamaCpp();
-  // Format text using the appropriate prompt template
-  const formattedText = isQuery ? formatQueryForEmbedding(text) : formatDocForEmbedding(text);
-  const result = await llm.embed(formattedText, { model, isQuery });
+  const llm = getDefaultLLM();
+  // OpenAI embeddings don't need task prefixes - just pass the raw text
+  const result = await llm.embed(text, { model, isQuery });
   return result?.embedding || null;
 }
 
@@ -2056,8 +2014,7 @@ export async function expandQuery(query: string, model: string = DEFAULT_QUERY_M
     return [query, ...lines.slice(0, 2)];
   }
 
-  const llm = getDefaultLlamaCpp();
-  // Note: LlamaCpp uses hardcoded model, model parameter is ignored
+  const llm = getDefaultLLM();
   const results = await llm.expandQuery(query);
   const queryTexts = results.map(r => r.text);
 
@@ -2075,37 +2032,12 @@ export async function expandQuery(query: string, model: string = DEFAULT_QUERY_M
 // =============================================================================
 
 export async function rerank(query: string, documents: { file: string; text: string }[], model: string = DEFAULT_RERANK_MODEL, db: Database): Promise<{ file: string; score: number }[]> {
-  const cachedResults: Map<string, number> = new Map();
-  const uncachedDocs: RerankDocument[] = [];
-
-  // Check cache for each document
-  for (const doc of documents) {
-    const cacheKey = getCacheKey("rerank", { query, file: doc.file, model });
-    const cached = getCachedResult(db, cacheKey);
-    if (cached !== null) {
-      cachedResults.set(doc.file, parseFloat(cached));
-    } else {
-      uncachedDocs.push({ file: doc.file, text: doc.text });
-    }
-  }
-
-  // Rerank uncached documents using LlamaCpp
-  if (uncachedDocs.length > 0) {
-    const llm = getDefaultLlamaCpp();
-    const rerankResult = await llm.rerank(query, uncachedDocs, { model });
-
-    // Cache results
-    for (const result of rerankResult.results) {
-      const cacheKey = getCacheKey("rerank", { query, file: result.file, model });
-      setCachedResult(db, cacheKey, result.score.toString());
-      cachedResults.set(result.file, result.score);
-    }
-  }
-
-  // Return all results sorted by score
-  return documents
-    .map(doc => ({ file: doc.file, score: cachedResults.get(doc.file) || 0 }))
-    .sort((a, b) => b.score - a.score);
+  // Cloud-only version: reranking is not implemented
+  // Return documents in original order with uniform scores based on position
+  return documents.map((doc, index) => ({
+    file: doc.file,
+    score: 1 - index * 0.01, // Slight decay to maintain order
+  }));
 }
 
 // =============================================================================
